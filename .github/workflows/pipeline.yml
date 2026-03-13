@@ -71,6 +71,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fix ZAP permissions
+        run: |
+          touch zap.yaml
+          chmod a+w zap.yaml
+          
       - name: Build Docker image
         run: docker build -t devsecops-demo .
 
