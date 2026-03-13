@@ -5,19 +5,24 @@ A CI/CD pipeline with automated security testing for a Python Flask application.
 ## Pipeline Overview
 
 Every push to `main` triggers the following security checks automatically:
+
 ```
-Code Push → Tests → SonarCloud (SAST) → Snyk (SCA) → OWASP ZAP (DAST)
+Code Push → Tests → SonarCloud (SAST) → Snyk (SCA) → Trivy (Container Scan) → OWASP ZAP (DAST)
 ```
+
 ## Pipeline Diagram
+
 ```mermaid
 flowchart TD
     A[git push → main] --> B[Tests - pytest]
     B --> C[SonarCloud\nSAST]
     B --> D[Snyk\nSCA]
-    B --> E[OWASP ZAP\nDAST]
-    C --> F[Pipeline complete]
-    D --> F
-    E --> F
+    B --> E[Trivy\nContainer Scan]
+    B --> F[OWASP ZAP\nDAST]
+    C --> G[Pipeline complete]
+    D --> G
+    E --> G
+    F --> G
 ```
 
 ## Security Tools
@@ -28,9 +33,17 @@ Analyzes the source code on every push to detect vulnerabilities, code smells, a
 **Finding fixed:** Routes lacked explicit HTTP method declarations, violating the principle of least privilege. Fixed by adding `methods=['GET']` to all endpoints.
 
 ### Snyk — Software Composition Analysis (SCA)
-Scans `requirements.txt` for known vulnerabilities in third-party dependencies.
+Scans `requirements.txt` for known vulnerabilities in third-party application dependencies.
 
 **Finding fixed:** `gunicorn==22.0.0` had a high severity vulnerability. Snyk generated the fix PR automatically — updated to a patched version.
+
+### Trivy — Container Image Scanning
+Scans the full Docker image for vulnerabilities across two layers that other tools miss:
+
+- **OS base packages** — the `python:3.12-slim` image includes Debian system libraries (openssl, libc, zlib). Trivy cross-references installed versions against CVE databases (NVD, Red Hat, Debian). Snyk does not cover this layer.
+- **Application dependencies** — a second layer of coverage on `requirements.txt`, using a different vulnerability database than Snyk for broader detection.
+
+Pipeline is configured with `severity: CRITICAL,HIGH` and `ignore-unfixed: true` — only fails on actionable, high-impact vulnerabilities.
 
 ### OWASP ZAP — Dynamic Application Security Testing (DAST)
 Attacks the running application to detect vulnerabilities that only appear at runtime.
@@ -49,21 +62,24 @@ Attacks the running application to detect vulnerabilities that only appear at ru
 **Non-root user** — the container runs as `appuser` instead of `root`, limiting the blast radius if the application is compromised.
 
 ## Project Structure
+
 ```
 devsecops-pipeline/
 ├── app/
-│   ├── __init__.py       # App factory
-│   └── routes.py         # Endpoints with security headers
+│   ├── __init__.py               # App factory
+│   └── routes.py                 # Endpoints with security headers
 ├── tests/
-│   └── test_app.py       # Pytest test suite
+│   └── test_app.py               # Pytest test suite
 ├── .github/
 │   └── workflows/
-│       └── pipeline.yml  # CI/CD pipeline definition
-├── Dockerfile            # Multi-stage, non-root build
+│       └── pipeline.yml          # CI/CD pipeline definition
+├── Dockerfile                    # Multi-stage, non-root build
 ├── sonar-project.properties
 └── requirements.txt
 ```
+
 ## Running Locally
+
 ```bash
 # Install dependencies
 pip install -r requirements.txt
@@ -76,5 +92,5 @@ docker build -t devsecops-demo .
 docker run -p 5000:5000 devsecops-demo
 ```
 
-## Pipeline Results
+## Pipeline Status
 ![Pipeline](https://github.com/Illumidragui/devsecops-pipeline/actions/workflows/pipeline.yml/badge.svg)
