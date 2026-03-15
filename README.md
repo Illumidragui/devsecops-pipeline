@@ -7,25 +7,29 @@ A CI/CD pipeline with automated security testing for a Python Flask application.
 Every push to `main` triggers the following security checks automatically:
 
 ```
-Code Push → Tests → SonarCloud (SAST) → Snyk (SCA) → Trivy (Container Scan) → OWASP ZAP (DAST)
+Code Push → Gitleaks (secret scan) → Tests → SonarCloud (SAST) → Snyk (SCA) → Trivy (Container Scan) → OWASP ZAP (DAST) → Consolidated Report
 ```
 
 ## Pipeline Diagram
 
 ```mermaid
 flowchart TD
-    A[git push → main] --> B[Tests - pytest]
-    B --> C[SonarCloud\nSAST]
-    B --> D[Snyk\nSCA]
-    B --> E[Trivy\nContainer Scan]
-    B --> F[OWASP ZAP\nDAST]
-    C --> G[Pipeline complete]
-    D --> G
-    E --> G
-    F --> G
+    A[git push → main] --> B[Gitleaks\nSecret Scan]
+    B --> C[Tests - pytest]
+    C --> D[SonarCloud\nSAST]
+    C --> E[Snyk\nSCA]
+    C --> F[Trivy\nContainer Scan]
+    C --> G[OWASP ZAP\nDAST]
+    D --> H[Consolidated Report]
+    E --> H
+    F --> H
+    G --> H
 ```
 
 ## Security Tools
+
+### Gitleaks — Secret Scanning
+Runs on every push to detect hard-coded secrets (API keys, tokens, passwords) in the repository history.
 
 ### SonarCloud — Static Application Security Testing (SAST)
 Analyzes the source code on every push to detect vulnerabilities, code smells, and bugs before deployment.
@@ -55,6 +59,9 @@ Attacks the running application to detect vulnerabilities that only appear at ru
 - `Cross-Origin-Resource-Policy` — prevents cross-origin data leaks
 - `Cache-Control` — prevents sensitive data caching
 
+### Consolidated Security Report
+At the end of the pipeline a consolidated report is generated combining the output from all tools (SonarCloud, Snyk, Trivy, ZAP) into a single `consolidated-report.md` artifact.
+
 ## Security Decisions in the Dockerfile
 
 **Multi-stage build** — separates build and runtime environments, reducing the attack surface by excluding build tools from the final image.
@@ -73,6 +80,11 @@ devsecops-pipeline/
 ├── .github/
 │   └── workflows/
 │       └── pipeline.yml          # CI/CD pipeline definition
+├── scripts/                      # Pipeline helper scripts
+│   ├── generate_consolidated_report.sh
+│   ├── snyk_summary.sh
+│   ├── trivy_summary.sh
+│   └── zap_summary.sh
 ├── Dockerfile                    # Multi-stage, non-root build
 ├── sonar-project.properties
 └── requirements.txt
