@@ -14,12 +14,12 @@ Code Push → Gitleaks (secret scan) → Tests → SonarCloud (SAST) → Snyk (S
 
 ```mermaid
 flowchart TD
-    A[git push → main] --> B[Gitleaks(Secret Scan)]
+    A[git push → main] --> B[Gitleaks\nSecret Scan]
     B --> C[Tests - pytest]
-    C --> D[SonarCloud(SAST)]
-    C --> E[Snyk(SCA)]
-    C --> F[Trivy(Container Scan)]
-    C --> G[OWASP ZAP(DAST)]
+    C --> D[SonarCloud\nSAST]
+    C --> E[Snyk\nSCA]
+    C --> F[Trivy\nContainer Scan]
+    C --> G[OWASP ZAP\nDAST]
     D --> H[Consolidated Report]
     E --> H
     F --> H
