@@ -83,7 +83,7 @@ jobs:
         with:
           name: snyk-report
           path: snyk-report.json
-          retention-days: 30
+          retention-days: 7
 
       - name: Snyk - enforce threshold
         uses: snyk/actions/python@master
@@ -102,6 +102,7 @@ jobs:
     needs: test
     permissions:
       security-events: write  # permite subir SARIF al Security tab
+      security-events: read
       contents: read          # permite leer el repo
     steps:
       - uses: actions/checkout@v6
@@ -132,7 +133,7 @@ jobs:
         with:
           name: trivy-report
           path: trivy-report.json
-          retention-days: 30
+          retention-days: 7
 
       - name: Upload Trivy SARIF to GitHub Security
         if: always()
@@ -159,6 +160,8 @@ jobs:
     needs: test
     permissions:
       issues: write
+      security-events: write
+      security-events: read
     steps:
       - uses: actions/checkout@v6
       - name: Build Docker image
@@ -177,7 +180,7 @@ jobs:
           artifact_name: zap-report
 
       - name: Upload ZAP SARIF to GitHub Security
-        if: always()
+        if: always() && hashFiles('zap-report.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: zap-report.sarif
@@ -191,7 +194,7 @@ jobs:
             report_html.html
             report_json.json
             report_md.md
-          retention-days: 30
+          retention-days: 7
 
       - name: ZAP summary
         if: always()
@@ -225,7 +228,7 @@ jobs:
         with:
           name: security-report-${{ github.run_number }}
           path: consolidated-report.md
-          retention-days: 90
+          retention-days: 7
 
       - name: Post summary to GitHub
         if: always()
