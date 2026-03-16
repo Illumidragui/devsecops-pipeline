@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set +e
+
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
 SHORT_COMMIT="${GITHUB_SHA:0:7}"
 BRANCH="$GITHUB_REF_NAME"
