@@ -70,8 +70,7 @@ jobs:
           cache: 'pip'
       - name: Install dependencies
         run: pip install -r requirements.txt
-      # Paso 1: genera el JSON para los scripts (continue-on-error para no
-      # abortar el pipeline antes de subir el reporte)
+      
       - name: Snyk scan - generate JSON report
         uses: snyk/actions/python@master
         continue-on-error: true
@@ -86,7 +85,6 @@ jobs:
           name: snyk-report
           path: snyk-report.json
           retention-days: 7
-      # Paso 2: enforcement real — falla el job si hay vulns críticas
       - name: Snyk - enforce threshold
         uses: snyk/actions/python@master
         env:
@@ -108,7 +106,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker image
         run: docker build -t devsecops-demo .
-      # Scan 1: JSON para los scripts de reporte
+
+      # Scan 1: JSON para artefacto descargable y scripts de reporte
       - name: Trivy scan - JSON report
         uses: aquasecurity/trivy-action@master
         with:
@@ -124,23 +123,28 @@ jobs:
           name: trivy-report
           path: trivy-report.json
           retention-days: 7
-      # Scan 2: SARIF para GitHub Security tab + blocking (exit-code: 1)
-      # Combina las dos responsabilidades en un solo scan
-      - name: Trivy scan - tabla debug
+
+      # Scan 2: TABLE — visibilidad en logs + blocking
+      # El formato table imprime al stdout, por lo que verás exactamente
+      # qué CVE bloquea el pipeline si hay vulnerabilidades.
+      - name: Trivy scan - enforce blocking
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'devsecops-demo'
           format: 'table'
+          exit-code: '1'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
-        continue-on-error: true   # solo para ver, no bloquea
-      - name: Trivy scan - SARIF + enforce blocking
+
+      # Scan 3: SARIF — solo para la pestaña Security de GitHub, sin blocking.
+      # El exit-code aquí causaba falsos positivos porque la action internamente
+      # hace dos pasadas y ignore-unfixed no se aplica correctamente en la segunda.
+      - name: Trivy scan - SARIF
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'devsecops-demo'
           format: 'sarif'
           output: 'trivy-report.sarif'
-          exit-code: '1'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
       - name: Upload Trivy SARIF to GitHub Security
@@ -148,6 +152,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-report.sarif
+
       - name: Trivy summary
         if: always()
         run: bash scripts/trivy_summary.sh
