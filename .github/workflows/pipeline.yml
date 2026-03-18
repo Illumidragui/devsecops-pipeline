@@ -4,7 +4,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   gitleaks:
@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -51,7 +51,6 @@ jobs:
         with:
           args: >
             -Dsonar.host.url=https://sonarcloud.io
-
       - name: SonarCloud summary
         if: always()
         run: |
@@ -65,13 +64,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
       - name: Install dependencies
         run: pip install -r requirements.txt
-
+      
       - name: Snyk scan - generate JSON report
         uses: snyk/actions/python@master
         continue-on-error: true
@@ -79,22 +78,19 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           args: --severity-threshold=high --json-file-output=snyk-report.json
-
-      - name: Upload Snyk report
+      - name: Upload Snyk JSON report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: snyk-report
           path: snyk-report.json
           retention-days: 7
-
       - name: Snyk - enforce threshold
         uses: snyk/actions/python@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           args: --severity-threshold=high
-
       - name: Snyk summary
         if: always()
         run: bash scripts/snyk_summary.sh
@@ -111,7 +107,8 @@ jobs:
       - name: Build Docker image
         run: docker build -t devsecops-demo .
 
-      - name: Trivy scan - generate JSON report
+      # Scan 1: JSON para artefacto descargable y scripts de reporte
+      - name: Trivy scan - JSON report
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'devsecops-demo'
@@ -119,30 +116,17 @@ jobs:
           output: 'trivy-report.json'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
-
-      - name: Trivy scan - generate SARIF report
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: 'devsecops-demo'
-          format: 'sarif'
-          output: 'trivy-report.sarif'
-          severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true
-
       - name: Upload Trivy JSON report
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-report
           path: trivy-report.json
           retention-days: 7
 
-      - name: Upload Trivy SARIF to GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-report.sarif
-
+      # Scan 2: TABLE — visibilidad en logs + blocking
+      # El formato table imprime al stdout, por lo que verás exactamente
+      # qué CVE bloquea el pipeline si hay vulnerabilidades.
       - name: Trivy scan - enforce blocking
         uses: aquasecurity/trivy-action@master
         with:
@@ -151,6 +135,23 @@ jobs:
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
+
+      # Scan 3: SARIF — solo para la pestaña Security de GitHub, sin blocking.
+      # El exit-code aquí causaba falsos positivos porque la action internamente
+      # hace dos pasadas y ignore-unfixed no se aplica correctamente en la segunda.
+      - name: Trivy scan - SARIF
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'devsecops-demo'
+          format: 'sarif'
+          output: 'trivy-report.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+      - name: Upload Trivy SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-report.sarif
 
       - name: Trivy summary
         if: always()
@@ -171,7 +172,6 @@ jobs:
         run: docker run -d -p 5000:5000 --name app devsecops-demo
       - name: Wait for app to be ready
         run: sleep 5
-
       - name: Run ZAP scan
         uses: zaproxy/action-baseline@v0.15.0
         with:
@@ -179,32 +179,19 @@ jobs:
           fail_action: false
           format: sarif
           artifact_name: zap-report
-
       - name: Upload ZAP SARIF to GitHub Security
         if: always() && hashFiles('zap-report.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: zap-report.sarif
-
-      - name: Upload ZAP reports
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: zap-reports
-          path: |
-            report_html.html
-            report_json.json
-            report_md.md
-          retention-days: 7
-
       - name: ZAP summary
         if: always()
         run: bash scripts/zap_summary.sh
 
   # -----------------------------------------------------------------------
-  # Job final: consolida todos los artefactos en un único reporte descargable
+  # Job final: consolida todos los artefactos en un único reporte descargable.
   # if: always() → se ejecuta aunque cualquier job anterior haya fallado,
-  # garantizando que siempre tengas el reporte completo
+  # garantizando que siempre tengas el reporte completo.
   # -----------------------------------------------------------------------
   security-report:
     name: Consolidated Security Report
@@ -214,23 +201,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download all reports
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           path: all-reports
-
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
-
       - name: Generate consolidated report
         run: bash scripts/generate_consolidated_report.sh
-
       - name: Upload consolidated report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: security-report-${{ github.run_number }}
           path: consolidated-report.md
           retention-days: 7
-
       - name: Post summary to GitHub
         if: always()
         run: |
@@ -241,18 +224,36 @@ jobs:
             echo "The consolidated report could not be generated due to an error." >> $GITHUB_STEP_SUMMARY
           fi
 
+  # -----------------------------------------------------------------------
+  # Deploy: publica la imagen en GHCR para que ArgoCD (Lab 2) la consuma.
+  #
+  # needs incluye TODOS los jobs para poder verificar sus resultados.
+  # security-report tiene if: always() — su éxito no garantiza que los
+  # scanners hayan pasado, por eso chequeamos cada job explícitamente.
+  # -----------------------------------------------------------------------
   deploy:
     name: Deploy Package
     runs-on: ubuntu-latest
-    needs: security-report
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [gitleaks, test, sonarcloud, snyk, trivy, zap, security-report]
+    # Solo en push a main y si TODOS los jobs anteriores han sido exitosos
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push' &&
+      needs.gitleaks.result == 'success' &&
+      needs.test.result == 'success' &&
+      needs.sonarcloud.result == 'success' &&
+      needs.snyk.result == 'success' &&
+      needs.trivy.result == 'success' &&
+      needs.zap.result == 'success' &&
+      needs.security-report.result == 'success'
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set lowercase image name 
+      - name: Set lowercase image name
+        # GHCR requiere que el nombre del repositorio esté en minúsculas
         run: echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Log in to GitHub Container Registry
@@ -267,4 +268,8 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.IMAGE_NAME }}:latest
+          # Tag con SHA corto para que ArgoCD pueda rastrear versiones exactas
+          # latest se mantiene para que ArgoCD pueda hacer image polling simple
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
