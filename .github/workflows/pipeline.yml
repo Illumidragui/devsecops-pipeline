@@ -126,6 +126,14 @@ jobs:
           retention-days: 7
       # Scan 2: SARIF para GitHub Security tab + blocking (exit-code: 1)
       # Combina las dos responsabilidades en un solo scan
+      - name: Trivy scan - tabla debug
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'devsecops-demo'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+        continue-on-error: true   # solo para ver, no bloquea
       - name: Trivy scan - SARIF + enforce blocking
         uses: aquasecurity/trivy-action@master
         with:
