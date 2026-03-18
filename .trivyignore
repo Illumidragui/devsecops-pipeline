@@ -1,0 +1,11 @@
+# .trivyignore
+#
+# CVE-2023-4863 — libwebp heap buffer overflow
+# Aceptado: la app no procesa imágenes WebP de fuentes no confiables.
+# Revisión programada: 2025-03-01
+CVE-2023-4863
+
+# CVE-2023-44487 — HTTP/2 Rapid Reset
+# Aceptado: no hay fix disponible en python:3.11-slim a fecha 2025-01-15
+# Revisión programada: 2025-04-01
+CVE-2023-44487

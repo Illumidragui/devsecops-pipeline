@@ -1,0 +1,19 @@
+# .zap/rules.tsv
+# Formato: ID_REGLA	ACCIÓN	(comentario)
+# FAIL  → bloquea el pipeline
+# WARN  → reporta sin bloquear
+# IGNORE → silencia completamente
+
+# Inyecciones — siempre bloquean
+40012	FAIL	(Cross Site Scripting reflected)
+40014	FAIL	(Cross Site Scripting persistent)
+40018	FAIL	(SQL injection)
+40019	FAIL	(SQL injection MySQL)
+
+# Cabeceras de seguridad — avisan pero no bloquean
+10202	WARN	(Absence of Anti-CSRF Tokens)
+10038	WARN	(Content Security Policy header not set)
+10035	WARN	(Strict-Transport-Security header not set)
+
+# Informacional — ignorar en pipelines de desarrollo
+10027	IGNORE	(Information disclosure — suspicious comments)
