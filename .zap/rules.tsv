@@ -1,0 +1,21 @@
+# .zap/rules.tsv
+# Formato: ID_REGLA	ACCIÓN	(comentario)
+# FAIL  → bloquea el pipeline
+# WARN  → reporta sin bloquear
+# IGNORE → silencia completamente
+
+# Inyecciones críticas — siempre bloquean
+40012	FAIL	(Cross Site Scripting reflected)
+40014	FAIL	(Cross Site Scripting persistent)
+40018	FAIL	(SQL injection)
+
+# CSP y Permissions Policy — resueltos en el código con set_security_headers()
+# Se mantienen como WARN para verificar que las cabeceras están presentes.
+# Si ZAP sigue reportándolos tras el fix, revisar la implementación.
+10038	WARN	(Content Security Policy header not set)
+10063	WARN	(Permissions Policy header not set)
+
+# Non-Storable Content — falso positivo.
+# ZAP reporta respuestas dinámicas sin caché como alerta.
+# Comportamiento correcto para una API Flask.
+10049	IGNORE	(Non-Storable Content)

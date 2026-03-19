@@ -1,4 +1,5 @@
 name: DevSecOps Pipeline
+
 on:
   push:
     branches: [ main ]
@@ -7,6 +8,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  # -----------------------------------------------------------------------
+  # GITLEAKS — primer job, bloquea todo si hay secretos expuestos.
+  # Se ejecuta antes que cualquier otra cosa porque un secreto en el código
+  # invalida cualquier análisis posterior.
+  # -----------------------------------------------------------------------
   gitleaks:
     name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
@@ -19,6 +25,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # -----------------------------------------------------------------------
+  # TEST — los tests antes que cualquier scanner.
+  # No tiene sentido escanear código que ni siquiera funciona.
+  # -----------------------------------------------------------------------
   test:
     name: Tests
     runs-on: ubuntu-latest
@@ -35,6 +45,10 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -v
 
+  # -----------------------------------------------------------------------
+  # SONARCLOUD — SAST: analiza el código fuente.
+  # Corre en paralelo con snyk después de que los tests pasan.
+  # -----------------------------------------------------------------------
   sonarcloud:
     name: SonarCloud Analysis
     runs-on: ubuntu-latest
@@ -54,9 +68,13 @@ jobs:
       - name: SonarCloud summary
         if: always()
         run: |
-          echo "## 🔍 SonarCloud SAST" >> $GITHUB_STEP_SUMMARY
+          echo "## SonarCloud SAST" >> $GITHUB_STEP_SUMMARY
           echo "Análisis completado. Revisa los resultados en [SonarCloud](https://sonarcloud.io)." >> $GITHUB_STEP_SUMMARY
 
+  # -----------------------------------------------------------------------
+  # SNYK — SCA: analiza dependencias de Python.
+  # Corre en paralelo con sonarcloud.
+  # -----------------------------------------------------------------------
   snyk:
     name: Snyk Security Scan
     runs-on: ubuntu-latest
@@ -70,8 +88,7 @@ jobs:
           cache: 'pip'
       - name: Install dependencies
         run: pip install -r requirements.txt
-      
-      - name: Snyk scan - generate JSON report
+      - name: Snyk scan — generate JSON report
         uses: snyk/actions/python@master
         continue-on-error: true
         env:
@@ -85,7 +102,7 @@ jobs:
           name: snyk-report
           path: snyk-report.json
           retention-days: 7
-      - name: Snyk - enforce threshold
+      - name: Snyk — enforce threshold
         uses: snyk/actions/python@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
@@ -95,27 +112,93 @@ jobs:
         if: always()
         run: bash scripts/snyk_summary.sh
 
+  # -----------------------------------------------------------------------
+  # BUILD — construye la imagen UNA SOLA VEZ y la publica con el SHA como tag.
+  #
+  # Decisión de seguridad: construir una vez garantiza que la imagen
+  # escaneada por Trivy es exactamente la misma que llega al cluster.
+  # Si cada job construyera la suya, podríamos escanear A y desplegar B.
+  #
+  # El tag SHA es inmutable: identifica exactamente qué commit produjo
+  # esta imagen. latest se añade después, solo si todos los scans pasan.
+  # -----------------------------------------------------------------------
+  build:
+    name: Build and push image
+    runs-on: ubuntu-latest
+    needs: [sonarcloud, snyk]
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        run: |
+          echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' \
+            | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push with SHA tag
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  # -----------------------------------------------------------------------
+  # TRIVY — container image scan.
+  #
+  # FIX 1: exit-code: '1' hace que el job falle si encuentra
+  # vulnerabilidades HIGH/CRITICAL con fix disponible. Sin esto,
+  # Trivy reporta pero el pipeline continúa — el scanner no sirve de nada.
+  #
+  # FIX 2: ignore-unfixed: true en el scan que bloquea, false en el SARIF.
+  # Bloqueamos solo lo que podemos arreglar. Reportamos todo para visibilidad.
+  #
+  # FIX 3: escaneamos la imagen de GHCR, no una construida localmente.
+  # Es el mismo artefacto que ArgoCD desplegará en el cluster.
+  # -----------------------------------------------------------------------
   trivy:
     name: Trivy Container Scan
     runs-on: ubuntu-latest
-    needs: test
+    needs: build
     permissions:
       security-events: write
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker build -t devsecops-demo .
 
-      # Scan 1: JSON para artefacto descargable y scripts de reporte
-      - name: Trivy scan - JSON report
+      - name: Set image name
+        run: |
+          echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' \
+            | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Scan 1: bloquea el pipeline si hay HIGH/CRITICAL con fix disponible
+      - name: Trivy scan — blocking
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'devsecops-demo'
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: 'json'
           output: 'trivy-report.json'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
+          exit-code: '1'
+
       - name: Upload Trivy JSON report
         if: always()
         uses: actions/upload-artifact@v4
@@ -124,29 +207,18 @@ jobs:
           path: trivy-report.json
           retention-days: 7
 
-      # Scan 2: TABLE — visibilidad en logs + blocking
-      # El formato table imprime al stdout, por lo que verás exactamente
-      # qué CVE bloquea el pipeline si hay vulnerabilidades.
-      - name: Trivy scan - enforce blocking
+      # Scan 2: reporte completo para GitHub Security, sin bloquear
+      # if: always() garantiza que se genera aunque el scan anterior haya fallado
+      - name: Trivy scan — full SARIF report
+        if: always()
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'devsecops-demo'
-          format: 'table'
-          exit-code: '1'
-          severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true
-
-      # Scan 3: SARIF — solo para la pestaña Security de GitHub, sin blocking.
-      # El exit-code aquí causaba falsos positivos porque la action internamente
-      # hace dos pasadas y ignore-unfixed no se aplica correctamente en la segunda.
-      - name: Trivy scan - SARIF
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: 'devsecops-demo'
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: 'sarif'
           output: 'trivy-report.sarif'
-          severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          ignore-unfixed: false
+
       - name: Upload Trivy SARIF to GitHub Security
         if: always()
         uses: github/codeql-action/upload-sarif@v3
@@ -157,41 +229,75 @@ jobs:
         if: always()
         run: bash scripts/trivy_summary.sh
 
+  # -----------------------------------------------------------------------
+  # ZAP — DAST: ataca la app corriendo.
+  #
+  # FIX: fail_action: true con un archivo de reglas .zap/rules.tsv.
+  # fail_action: false significa que ZAP nunca puede bloquear el deploy,
+  # convirtiendo el scanner en decoración.
+  # El archivo de reglas permite control granular: FAIL solo en lo crítico,
+  # WARN en el resto, IGNORE en falsos positivos conocidos.
+  # -----------------------------------------------------------------------
   zap:
     name: OWASP ZAP DAST Scan
     runs-on: ubuntu-latest
-    needs: test
+    needs: build
     permissions:
       issues: write
       security-events: write
+      packages: read
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker build -t devsecops-demo .
-      - name: Run app
-        run: docker run -d -p 5000:5000 --name app devsecops-demo
+
+      - name: Set image name
+        run: |
+          echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' \
+            | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Usa la misma imagen escaneada por Trivy, no una nueva build
+      - name: Run app from GHCR image
+        run: |
+          docker run -d -p 5000:5000 --name app \
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
       - name: Wait for app to be ready
-        run: sleep 5
+        run: |
+          echo "Waiting for app..."
+          for i in {1..10}; do
+            curl -sf http://localhost:5000 && break
+            echo "Attempt $i failed, retrying..."
+            sleep 3
+          done
+
       - name: Run ZAP scan
         uses: zaproxy/action-baseline@v0.15.0
         with:
           target: 'http://localhost:5000'
-          fail_action: false
-          format: sarif
+          fail_action: true
+          rules_file_name: '.zap/rules.tsv'
           artifact_name: zap-report
+          cmd_options: '-I'
+
       - name: Upload ZAP SARIF to GitHub Security
         if: always() && hashFiles('zap-report.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: zap-report.sarif
+
       - name: ZAP summary
         if: always()
         run: bash scripts/zap_summary.sh
 
   # -----------------------------------------------------------------------
-  # Job final: consolida todos los artefactos en un único reporte descargable.
-  # if: always() → se ejecuta aunque cualquier job anterior haya fallado,
-  # garantizando que siempre tengas el reporte completo.
+  # SECURITY REPORT — consolida todos los artefactos.
+  # if: always() garantiza visibilidad completa aunque algún scanner falle.
   # -----------------------------------------------------------------------
   security-report:
     name: Consolidated Security Report
@@ -221,21 +327,25 @@ jobs:
             cat consolidated-report.md >> $GITHUB_STEP_SUMMARY
           else
             echo "## Security Report" >> $GITHUB_STEP_SUMMARY
-            echo "The consolidated report could not be generated due to an error." >> $GITHUB_STEP_SUMMARY
+            echo "No se pudo generar el reporte consolidado." >> $GITHUB_STEP_SUMMARY
           fi
 
   # -----------------------------------------------------------------------
-  # Deploy: publica la imagen en GHCR para que ArgoCD (Lab 2) la consuma.
+  # DEPLOY — promociona la imagen SHA a latest.
   #
-  # needs incluye TODOS los jobs para poder verificar sus resultados.
-  # security-report tiene if: always() — su éxito no garantiza que los
-  # scanners hayan pasado, por eso chequeamos cada job explícitamente.
+  # No reconstruye la imagen. Re-tagea la imagen ya escaneada.
+  # Esto garantiza que lo que llega al cluster es exactamente
+  # lo que pasó por Trivy y ZAP.
+  #
+  # Las condiciones explícitas en cada needs.X.result son intencionales:
+  # security-report tiene if: always() — su 'success' no implica que los
+  # scanners pasaron, solo que el job de reporte se ejecutó.
+  # Por eso verificamos cada scanner individualmente.
   # -----------------------------------------------------------------------
   deploy:
-    name: Deploy Package
+    name: Deploy — promote image to latest
     runs-on: ubuntu-latest
     needs: [gitleaks, test, sonarcloud, snyk, trivy, zap, security-report]
-    # Solo en push a main y si TODOS los jobs anteriores han sido exitosos
     if: |
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push' &&
@@ -244,17 +354,15 @@ jobs:
       needs.sonarcloud.result == 'success' &&
       needs.snyk.result == 'success' &&
       needs.trivy.result == 'success' &&
-      needs.zap.result == 'success' &&
-      needs.security-report.result == 'success'
+      needs.zap.result == 'success'
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set lowercase image name
-        # GHCR requiere que el nombre del repositorio esté en minúsculas
-        run: echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+      - name: Set image name
+        run: |
+          echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' \
+            | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -263,13 +371,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          # Tag con SHA corto para que ArgoCD pueda rastrear versiones exactas
-          # latest se mantiene para que ArgoCD pueda hacer image polling simple
-          tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+      # Descarga la imagen ya escaneada y le añade el tag latest
+      # Sin reconstruir — lo que se escanea es lo que se despliega
+      - name: Promote SHA image to latest
+        run: |
+          docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker tag  ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                      ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:latest
+          echo "Promoted ${{ github.sha }} to latest" >> $GITHUB_STEP_SUMMARY
