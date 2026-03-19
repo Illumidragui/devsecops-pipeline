@@ -283,6 +283,7 @@ jobs:
           fail_action: true
           rules_file_name: '.zap/rules.tsv'
           artifact_name: zap-report
+          cmd_options: '-I'
 
       - name: Upload ZAP SARIF to GitHub Security
         if: always() && hashFiles('zap-report.sarif') != ''
