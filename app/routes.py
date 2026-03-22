@@ -22,4 +22,4 @@ def index():
 @main.route('/health', methods=['GET'])
 def health():
     response = make_response(jsonify({"healthy": True}), 200)
-    return add_security_headers(response)
+    return add_security_headers(response)# trigger
