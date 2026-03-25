@@ -387,7 +387,8 @@ jobs:
   #
   # Uses a SHA tag (not latest) so the deployed image is fully traceable
   # back to the commit and pipeline run that produced it.
-  #
+  #   
+  # 
   # Requires a secret CONFIG_REPO_TOKEN: a GitHub PAT with 'repo' scope
   # on the config repo (Illumidragui/devsecops-k8s-config).
   # -----------------------------------------------------------------------
